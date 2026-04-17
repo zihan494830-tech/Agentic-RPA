@@ -1,0 +1,17 @@
+{
+  "experiment_id": "exp-poffices-dynamic",
+  "scenario": "poffices-agent",
+  "scenario_spec_path": "poffices-agent.json",
+  "task_spec_ids": ["task-poffices-query"],
+  "extra": {
+    "orchestration_mode": "goal_driven",
+    "use_llm_planner": true,
+    "use_llm_task_description": true,
+    "use_llm_query": true,
+    "planner_ignore_template": true,
+    "goal": "验证正常 Query 流程没问题",
+    "agent_descriptor": "Poffices 的 Research Proposal Agent",
+    "agent_type": "llm",
+    "agent_under_test": "Research Proposal"
+  }
+}

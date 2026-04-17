@@ -1,0 +1,18 @@
+# 核心依赖（契约与运行时）
+pydantic>=2.0,<3
+pydantic-settings>=2.0
+
+# HTTP 服务（Postman / FastAPI 文档测试）
+fastapi>=0.109,<1
+uvicorn[standard]>=0.27,<1
+
+# 可选：真实 RPA（Playwright）、OpenAI（也可用 pip install ".[phase1]"）
+# playwright>=1.40,<2
+# openai>=1.0,<2
+
+# 本地 .env 加载（LLM / Qwen 等 API Key）
+python-dotenv>=1.0,<2
+
+# 开发与质量
+ruff>=0.1.0
+pytest>=7.0

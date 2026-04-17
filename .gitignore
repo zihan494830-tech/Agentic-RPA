@@ -1,0 +1,28 @@
+# 本地 API Key（切勿提交）
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# 轨迹与日志（B8 落盘）
+logs/
+
+# 无扩展名的随机名文件：多为 IDE/Cursor 未命名缓冲区保存到工作区根目录时生成，
+# 与项目无关，可安全删除。若再次出现，直接删掉即可。
+# （gitignore 无法按”无扩展名+随机串”精确匹配，故不在此列举）
+
+# IDE / 工具配置（含敏感 token，切勿提交）
+.claude/
+.cursor/
+
+# 调试日志与临时文件
+*.log
+debug-*.log
+backup.*

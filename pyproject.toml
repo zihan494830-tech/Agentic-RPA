@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "art-framework"
+version = "0.1.0"
+description = "Agentic RPA Testing (ART) Framework for Agent Systems"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0,<3",
+    "pydantic-settings>=2.0",
+    "fastapi>=0.109,<1",
+    "uvicorn[standard]>=0.27,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.1.0",
+    "pytest>=7.0",
+]
+# 组名 phase1 保留，与 README 中 pip install ".[phase1]" 一致
+phase1 = [
+    "playwright>=1.40,<2",
+    "openai>=1.0,<2",
+]
+vibium = [
+    "vibium>=0.1.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

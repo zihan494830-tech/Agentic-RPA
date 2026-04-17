@@ -1,0 +1,32 @@
+{
+  "task_specs": [
+    {
+      "task_spec_id": "task-001",
+      "description": "验收：跑通 2 步闭环",
+      "initial_state": {},
+      "ground_truth": null,
+      "extra": {}
+    },
+    {
+      "task_spec_id": "task-002",
+      "description": "表单填写：打开系统、填写表单并提交",
+      "initial_state": { "form_url": "/demo/form" },
+      "ground_truth": { "form_submitted": true },
+      "extra": {}
+    },
+    {
+      "task_spec_id": "task-003",
+      "description": "多流：多步与分支流程",
+      "initial_state": {},
+      "ground_truth": null,
+      "extra": { "route_type": "multi_flow" }
+    },
+    {
+      "task_spec_id": "task-poffices-query",
+      "description": "在 Poffices 上测试 Research Proposal Agent 的 Query 能力",
+      "initial_state": { "query": "简要介绍AI" },
+      "ground_truth": null,
+      "extra": {}
+    }
+  ]
+}

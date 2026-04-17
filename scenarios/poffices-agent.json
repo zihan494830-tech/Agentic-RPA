@@ -1,0 +1,337 @@
+{
+  "id": "poffices-agent",
+  "name": "Poffices Agent Query Testing",
+  "description": "在 Poffices 场景下测试指定 Agent 的 Query 能力，确保能完成应用就绪、发送问题和获取响应。",
+  "narrative": "这是一个 Poffices Agent 测试场景。任务需要在允许的 Agent 和 Block 范围内完成一次完整 Query 流程，并在必要时遵守恢复相关约束。",
+  "task_spec_ids": ["task-poffices-query"],
+  "allowed_agents": [
+    "Problem Statement",
+    "Ideation",
+    "Feasibility Analysis",
+    "Market Analysis",
+    "Competitive Analysis",
+    "Business Forecasting",
+    "Operation Strategy",
+    "R&D Strategic Plan",
+    "Development Plan",
+    "CRM strategy",
+    "ESG Strategy",
+    "Negotiation Strategies",
+    "Strategic Crisis Management",
+    "Risk Management plan",
+    "Sustainability Plan",
+    "Resource Management Plan",
+    "Business Model Evaluation",
+    "Marketing Model Evaluation",
+    "Sales Model Evaluation",
+    "Technology Evaluation",
+    "Supply Chain Evaluation",
+    "Research Intro",
+    "Literature Review",
+    "Research Proposal",
+    "Research Methodology",
+    "Research Experiment",
+    "Project Proposal",
+    "RnD Project Plan",
+    "Commercialization",
+    "Product Dev Plan",
+    "Product Description",
+    "Marketing Plan",
+    "Sales Strategic Plan",
+    "Event Planner",
+    "Advertisement Plan",
+    "Exhibition Plan",
+    "Script",
+    "Press Release",
+    "EDM",
+    "Blog Article",
+    "Soc Media Post",
+    "Lecture Syllabus",
+    "Lecture Notes",
+    "Lecture Chapter",
+    "Lecture Q&A",
+    "Lecture Exam",
+    "Yearly Company Calendar",
+    "HR Strategy Plan",
+    "Staff Handbook",
+    "Appraisal Guideline",
+    "Staff Feedback Guideline",
+    "Recruitment Plan",
+    "Job description and Job post",
+    "Interview Question",
+    "Recruitment Written Test",
+    "Employment Contract",
+    "Company Letter",
+    "Announcement",
+    "Company Policy",
+    "Procurement Guideline",
+    "Workflow Guideline",
+    "Non-Disclosure Agreement",
+    "Agreement",
+    "Intellectual Property Claim",
+    "Licensing Agreement",
+    "Collaboration Document (MoU or LOI)",
+    "Questionnaire Form",
+    "Performance Evaluation Form",
+    "Notice Writing",
+    "KPI Guideline",
+    "Terms Sheet",
+    "Appreciation Letter",
+    "Recommendation Letter",
+    "Supporting Letter",
+    "Warning Letter",
+    "Complaint Letter",
+    "Budget and Offer",
+    "Investment Market Survey",
+    "Investment Annual Review",
+    "Investment Project Review",
+    "Investment Portfolio Proposal",
+    "Investment Execution Plan",
+    "Event Survey",
+    "Marketing Survey",
+    "Advertisement Survey",
+    "Exhibition Survey",
+    "Sales Survey",
+    "Speech Topic Ideation",
+    "Speech Topic Review",
+    "Speech Brief",
+    "Speech Note",
+    "Speech Script",
+    "Resume or CV",
+    "Biography",
+    "Job Application Letter",
+    "Essay Writer",
+    "Self-Learning Q&A",
+    "Gathering Idea with family, friends, etc",
+    "Travel Idea",
+    "Skill Idea",
+    "Gift Idea",
+    "Activity Idea"
+  ],
+  "suggested_agents": ["Research Proposal"],
+  "compound_blocks": [
+    {
+      "block_id": "test_agent_block",
+      "description": "测试单个 Agent 的完整流程：app_ready→send_query→get_response。适用于「测试某 Agent」的目标。",
+      "params_schema": {
+        "agent_name": "要测试的 Agent 名称",
+        "query": "发送的查询内容"
+      },
+      "steps": [
+        {"block_id": "app_ready", "params": {"options": {"agent_name": "$agent_name"}}},
+        {"block_id": "send_query", "params": {"query": "$query"}},
+        {"block_id": "get_response", "params": {}}
+      ]
+    },
+    {
+      "block_id": "multi_agent_linear_block",
+      "description": "按顺序测试多个 Agent，每个 Agent 独立完成 app_ready→send_query→get_response。适用于「测试/对比多个 Agent」的目标。",
+      "params_schema": {
+        "agents": "Agent 名称列表",
+        "queries": "与 agents 一一对应的 query 列表"
+      },
+      "step_template": [
+        {"block_id": "app_ready", "params": {"options": {"agent_name": "$agent"}}},
+        {"block_id": "send_query", "params": {"query": "$query"}},
+        {"block_id": "get_response", "params": {}}
+      ],
+      "iterate": {"agent": "agents", "query": "queries"}
+    },
+    {
+      "block_id": "agent_master_collaboration_block",
+      "description": "多 Agent 协作产出一份报告：discovery_bootstrap→agent_master_select_agents_for_flow→agent_master_run_flow_once。适用于「用多个 Agent 协作写一份报告」的目标。",
+      "params_schema": {
+        "agents": "Agent 名称列表（按顺序作为 Step1/2/3）",
+        "query": "协作任务描述（如「请写一份虚拟货币风险分析报告」）"
+      },
+      "steps": [
+        {"block_id": "discovery_bootstrap", "params": {}},
+        {"block_id": "agent_master_select_agents_for_flow", "params": {"agents": "$agents"}},
+        {"block_id": "agent_master_run_flow_once", "params": {"query": "$query"}}
+      ]
+    }
+  ],
+  "allowed_blocks": [
+    {
+      "block_id": "app_ready",
+      "description": "打开应用并进入可操作状态；可选指定要测试的 Agent。",
+      "params": {
+        "options": "可选。如 agent_name: 要测试的 Agent 名称。"
+      }
+    },
+    {
+      "block_id": "send_query",
+      "description": "在已就绪的会话中发送一条查询并触发执行。",
+      "params": {
+        "query": "必填。要发送的查询内容。"
+      }
+    },
+    {
+      "block_id": "get_response",
+      "description": "等待当前任务完成并取回结果内容。",
+      "params": {}
+    },
+    {
+      "block_id": "wait_output_complete",
+      "description": "仅等待页面出现“生成完毕”标识，不提取内容；get_response 失败时可用于恢复。",
+      "params": {
+        "timeout_sec": "可选"
+      }
+    },
+    {
+      "block_id": "refresh_page",
+      "description": "刷新当前页面；卡顿时可结合 wait_output_complete 与 get_response 做恢复。",
+      "params": {}
+    },
+    {
+      "block_id": "discovery_bootstrap",
+      "description": "登录并打开 Agent Master 面板，供 Discovery 或协作流程使用。",
+      "params": {}
+    },
+    {
+      "block_id": "agent_master_select_agents_for_flow",
+      "description": "清空右侧 Selected Agents，按顺序添加指定 Agent 列表，Apply。",
+      "params": {
+        "agents": "Agent 名称列表，顺序即 Step1/2/3"
+      }
+    },
+    {
+      "block_id": "agent_master_run_flow_once",
+      "description": "在已配置的 Agent Master Flow 下执行 query，自动点 Next 直到完成，提取最终报告。",
+      "params": {
+        "query": "协作任务描述"
+      }
+    }
+  ],
+  "flow_template": {
+    "template_id": "default-query-flow",
+    "description": "默认单 Agent 三段式流程",
+    "steps": [
+      {
+        "block_id": "app_ready",
+        "params": {
+          "options": {
+            "agent_name": "$agent_name"
+          }
+        }
+      },
+      {
+        "block_id": "send_query",
+        "params": {
+          "query": "$query"
+        }
+      },
+      {
+        "block_id": "get_response",
+        "params": {}
+      }
+    ]
+  },
+  "constraints": {
+    "required_blocks": ["app_ready", "send_query", "get_response"],
+    "forbidden_blocks": ["poffices_bootstrap", "poffices_query"],
+    "notes": [
+      "默认流程必须先完成 app_ready，再发送 query，最后获取响应。",
+      "恢复流程只能使用本场景允许的 Block。"
+    ]
+  },
+  "block_semantics": {
+    "flow_types": {
+      "single_agent": {
+        "description": "单 Agent 测试：选一个 agent，发 query，取结果",
+        "steps": ["app_ready", "send_query", "get_response"],
+        "when": "agents_to_test 长度为 1，且非协作模式"
+      },
+      "multi_agent_linear": {
+        "description": "多 Agent 分别测试：依次对每个 agent 执行 app_ready→send_query→get_response",
+        "steps": "对每个 agent 迭代 [app_ready, send_query, get_response]",
+        "when": "agents_to_test 长度 > 1，collaboration_mode=false"
+      },
+      "agent_master_collaboration": {
+        "description": "多 Agent 协作：选多个 agent 进 Flow，执行一次 query 产出一份报告",
+        "steps": ["discovery_bootstrap", "agent_master_select_agents_for_flow", "agent_master_run_flow_once"],
+        "when": "agents_to_test 长度 > 1，collaboration_mode=true"
+      }
+    },
+    "blocks": [
+      {
+        "block_id": "app_ready",
+        "description": "打开应用并进入可操作状态；可选指定要测试的 Agent。",
+        "flow_type": "single_agent",
+        "semantic_detail": "在单 Agent 模式下选择「一个」agent 并 Apply，会进入单 Agent 查询界面。若在 agent_master 协作流程中调用，会覆盖/破坏已选的多 Agent 状态，导致错误。",
+        "precondition": "应用已打开或需先 bootstrap",
+        "side_effect": "选择单个 agent，清空或覆盖多 Agent 选择",
+        "params": {"options.agent_name": "单个 Agent 名称，来自 agents_to_test[0] 或 agent_name"},
+        "do_not_use_in": ["agent_master_collaboration"]
+      },
+      {
+        "block_id": "send_query",
+        "description": "在已就绪的会话中发送一条查询并触发执行。",
+        "flow_type": "single_agent",
+        "semantic_detail": "在单 Agent 模式下向当前选中的「一个」agent 发送 query。协作流程中不应使用，协作由 agent_master_run_flow_once 负责发 query。",
+        "precondition": "已完成 app_ready（单 Agent）或 agent_master_select（协作）",
+        "side_effect": "触发生成，页面进入生成中状态",
+        "params": {"query": "必填，来自 initial_state.query 或 queries_per_agent"},
+        "do_not_use_in": ["agent_master_collaboration"]
+      },
+      {
+        "block_id": "get_response",
+        "description": "等待当前任务完成并取回结果内容。",
+        "flow_type": "single_agent",
+        "semantic_detail": "等待生成完毕并提取响应。单 Agent 与多 Agent 线性流程的收尾步；协作流程由 agent_master_run_flow_once 内部完成等待与提取。",
+        "precondition": "已发送 query，页面在生成中或已完成",
+        "side_effect": "无，只读",
+        "params": {}
+      },
+      {
+        "block_id": "discovery_bootstrap",
+        "description": "登录并打开 Agent Master 面板。",
+        "flow_type": "agent_master_collaboration",
+        "semantic_detail": "协作流程的入口：打开 Agent Master 界面，为后续 select_agents 做准备。仅用于协作流程。",
+        "precondition": "无",
+        "side_effect": "进入 Agent Master 面板",
+        "params": {}
+      },
+      {
+        "block_id": "agent_master_select_agents_for_flow",
+        "description": "清空右侧 Selected Agents，按顺序添加指定 Agent 列表，Apply。",
+        "flow_type": "agent_master_collaboration",
+        "semantic_detail": "在 Agent Master 中配置多 Agent 协作流：Clear All → 按顺序 Add 每个 agent → Apply。之后必须紧跟 agent_master_run_flow_once，中间不能插入 app_ready 或 send_query，否则会破坏多 Agent 选择。",
+        "precondition": "已完成 discovery_bootstrap",
+        "side_effect": "右侧 Selected Agents 已配置，Apply 生效",
+        "params": {"agents": "Agent 名称列表，来自 agents_to_test"},
+        "must_follow_with": "agent_master_run_flow_once",
+        "do_not_insert_between": ["app_ready", "send_query"]
+      },
+      {
+        "block_id": "agent_master_run_flow_once",
+        "description": "在已配置的 Agent Master Flow 下执行 query，自动点 Next 直到完成，提取最终报告。",
+        "flow_type": "agent_master_collaboration",
+        "semantic_detail": "协作流程的收尾：在已选多 Agent 的 Flow 下发送 query、自动步进直到完成、提取报告。内部完成「发 query + 等待 + 取结果」，无需再调用 send_query 或 get_response。",
+        "precondition": "已完成 agent_master_select_agents_for_flow，且中间未插入 app_ready/send_query",
+        "side_effect": "产出一份协作报告",
+        "params": {"query": "协作任务描述，来自 initial_state.query"}
+      },
+      {
+        "block_id": "wait_output_complete",
+        "description": "仅等待页面出现「生成完毕」标识，不提取内容。",
+        "flow_type": "recovery",
+        "semantic_detail": "恢复用：get_response 超时时可先 wait_output_complete 再 get_response。不用于主流程规划。",
+        "precondition": "页面在生成中",
+        "side_effect": "无",
+        "params": {"timeout_sec": "可选"}
+      },
+      {
+        "block_id": "refresh_page",
+        "description": "刷新当前页面。",
+        "flow_type": "recovery",
+        "semantic_detail": "【慎用】会整页刷新，清空已选 agent、表单、生成中的内容。仅当 get_response 长时间超时且 wait_output_complete 无效时考虑。刷新后需重新执行 app_ready 或 agent_master_select 等，否则后续步骤会失败。协作流程中 refresh 会丢失多 Agent 配置，恢复成本高。",
+        "precondition": "无",
+        "side_effect": "清空页面所有状态（agent 选择、表单、生成结果）",
+        "params": {},
+        "use_with_caution": true,
+        "after_refresh_must": "重新执行 app_ready 或 discovery_bootstrap + agent_master_select_agents_for_flow"
+      }
+    ]
+  }
+}

@@ -1,0 +1,146 @@
+{
+  "lang": "en",
+  "id": "21",
+  "nodes": [
+    {
+      "id": "4",
+      "type": "inputNode",
+      "position": {
+        "x": -2517.8429050086006,
+        "y": 1717.097629604624
+      },
+      "measured": {
+        "width": 300,
+        "height": 185
+      },
+      "selected": false,
+      "dragging": false,
+      "width": 300,
+      "height": 185,
+      "resizing": false,
+      "data": {
+        "title": "Input Analysis (id: 4)",
+        "name": "input-analysis",
+        "prompt": "You are an Input Analysis block (LN13: structured output only, no retrieval).\n\nThe following is the END USER message from Poffices:\n{query}\nLanguage hint: {language}\n\nYour job in this canvas version is ONLY:\n1) identify which Poffices Agent should be tested;\n2) convert the user message into a concise TEST GOAL for the downstream RPA block;\n3) keep a stable query field for compatibility.\n\nImportant:\n- The downstream RPA block will generate the final test query by itself from ultimate_goal.\n- So the output field named query is ONLY the normalized original user request for reference/compatibility, not the final text to type into the tested agent.\n- If the user says things like \"用 market analysis\" / \"use Market Analysis\", treat that as routing intent for agent_name.\n\nOutput ONLY one JSON object with these exact keys (no markdown fences, no extra text):\n{\n  \"ultimate_goal\": \"One sentence test goal for downstream RPA planning/query generation\",\n  \"agent_name\": \"Exact Poffices Agent display name only (e.g. Market Analysis)\",\n  \"query\": \"Normalized original user request for compatibility/reference only\",\n  \"keywords\": [\"2-5 short keywords\"],\n  \"language\": \"en or zh as appropriate\",\n  \"constraints\": [\"optional strings, or []\"],\n  \"short_summary_for_user\": \"One line for the user\"\n}\n\nRules:\n- Valid JSON only; escape quotes inside strings; no trailing commas.\n- agent_name must match Poffices UI spelling exactly.\n- ultimate_goal should preserve the user's substantive ask, but phrase it as a testing goal for the chosen agent.\n- query should preserve the user's request in a cleaned form, but it will NOT be used as the final RPA send_query text in this canvas.\n- Do not run RPA or planner here.",
+        "llm": "qwen-max-latest",
+        "function": "input"
+      }
+    },
+    {
+      "id": "19",
+      "type": "customNode_117",
+      "position": {
+        "x": -2146.2949684246078,
+        "y": 1699.0226557875658
+      },
+      "measured": {
+        "width": 356,
+        "height": 262
+      },
+      "selected": false,
+      "dragging": false,
+      "width": 356,
+      "height": 262,
+      "resizing": false,
+      "data": {
+        "title": "Toby-RPA (id: 19)",
+        "prompt": "{\n  \"goal\": \"{layer_name_input-analysis_output.ultimate_goal}\",\n  \"agents_to_test\": [\"{layer_name_input-analysis_output.agent_name}\"],\n  \"query\": \"{layer_name_input-analysis_output.query}\"\n}",
+        "schemaId": 117,
+        "function": "custom-117",
+        "llm": "Toby-RPA",
+        "name": "toby-rpa"
+      }
+    },
+    {
+      "id": "20",
+      "type": "mergeNode",
+      "position": {
+        "x": -1726.9538951706966,
+        "y": 1763.3917401863605
+      },
+      "measured": {
+        "width": 300,
+        "height": 185
+      },
+      "selected": false,
+      "dragging": false,
+      "width": 300,
+      "height": 185,
+      "resizing": false,
+      "data": {
+        "title": "Merge (id: 20)",
+        "name": "merge",
+        "function": "merge",
+        "prompt": "{\n  \"upstream_goal\": \"{layer_name_input-analysis_output.ultimate_goal}\",\n  \"upstream_agent\": \"{layer_name_input-analysis_output.agent_name}\",\n  \"upstream_query_ref\": \"{layer_name_input-analysis_output.query}\",\n  \"toby_rpa_extracted_data\": \"{layer_name_toby-rpa_output.extracted_data}\",\n  \"toby_rpa_http_body\": \"{layer_name_toby-rpa_output}\",\n  \"toby_rpa_result_json_string\": \"{layer_name_toby-rpa_output.choices[0].message.content}\"\n}"
+      }
+    },
+    {
+      "id": "7",
+      "type": "llmNode",
+      "position": {
+        "x": -1320.3315395465538,
+        "y": 1699.6332493249358
+      },
+      "measured": {
+        "width": 300,
+        "height": 243
+      },
+      "selected": false,
+      "dragging": false,
+      "width": 300,
+      "height": 243,
+      "resizing": false,
+      "data": {
+        "title": "LLM (id: 7)",
+        "name": "final-summary",
+        "llm": "qwen-max-latest",
+        "function": "content",
+        "exportTo": {
+          "pdf": false,
+          "docx": false,
+          "pptx": false
+        },
+        "sendToUser": true,
+        "prompt": "You must build the final report ONLY from the Merge output. The Toby-RPA API returns **chat.completion** with **extracted_data** (native PofficesRunResponse object, same as parsing choices[0].message.content) plus the string in **choices[0].message.content**.\n\n--- EXTRACTED_DATA (preferred: use if non-empty / valid JSON) ---\n{layer_name_merge_output.toby_rpa_extracted_data}\n--- END ---\n\n--- RESULT_JSON_STRING (parse as JSON after trim) ---\n{layer_name_merge_output.toby_rpa_result_json_string}\n--- END ---\n\n--- FULL_HTTP_BODY ---\n{layer_name_merge_output.toby_rpa_http_body}\n--- END ---\n\n--- MERGE_WHOLE ---\n{layer_name_merge_output}\n--- END ---\n\nParsing procedure:\n1) If **toby_rpa_extracted_data** parses as JSON object with keys `code` and `data`/`error`, call it R and skip string parsing.\n2) Else let T be trimmed **toby_rpa_result_json_string**. If empty or contains literal `layer_name_`, substitution failed — say so and stop.\n3) If T empty, parse **toby_rpa_http_body** as JSON: use top-level **extracted_data** if present, else choices[0].message.content as T.\n4) If still empty, same from MERGE_WHOLE.\n5) If no R yet, parse T as JSON → R.\n6) From R: request_id, code, data, error. On run_failed or null data, report error fields; do not claim success.\n7) On ok: report data.success, steps_run, plan_source, metrics, data.agent_results entries.\n8) On parse failure, quote first 400 chars of T.\n\nWrite a concise English report, sections 1-5: (1) Agent tested, (2) Question sent, (3) Response, (4) Success/metrics, (5) Notes. Be factual only."
+      }
+    }
+  ],
+  "edges": [
+    {
+      "interactionWidth": 75,
+      "source": "4",
+      "target": "19",
+      "markerEnd": {
+        "type": "arrowclosed",
+        "width": 24,
+        "height": 24
+      },
+      "id": "xy-edge__4-19",
+      "selected": false
+    },
+    {
+      "interactionWidth": 75,
+      "source": "19",
+      "target": "20",
+      "markerEnd": {
+        "type": "arrowclosed",
+        "width": 24,
+        "height": 24
+      },
+      "id": "xy-edge__19-20",
+      "selected": false
+    },
+    {
+      "interactionWidth": 75,
+      "source": "20",
+      "target": "7",
+      "markerEnd": {
+        "type": "arrowclosed",
+        "width": 24,
+        "height": 24
+      },
+      "id": "xy-edge__20-7",
+      "selected": false
+    }
+  ]
+}

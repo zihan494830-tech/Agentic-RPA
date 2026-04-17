@@ -1,0 +1,17 @@
+{
+  "experiment_id": "exp-poffices-force-llm",
+  "scenario": "poffices-agent",
+  "scenario_spec_path": "poffices-agent.json",
+  "task_spec_ids": ["task-poffices-query"],
+  "extra": {
+    "orchestration_mode": "goal_driven",
+    "use_llm_planner": true,
+    "use_llm_task_description": true,
+    "use_llm_query": true,
+    "planner_ignore_template": true,
+    "force_llm_plan": true,
+    "goal": "用3个agent协作出一份市场分析报告",
+    "agent_descriptor": "Poffices 多 Agent 协作",
+    "agent_type": "llm"
+  }
+}

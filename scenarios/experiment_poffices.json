@@ -1,0 +1,14 @@
+{
+  "experiment_id": "exp-poffices",
+  "scenario": "poffices-agent",
+  "scenario_spec_path": "poffices-agent.json",
+  "task_spec_ids": ["task-poffices-query"],
+  "extra": {
+    "use_llm_task_description": true,
+    "use_llm_query": true,
+    "agent_descriptor": "Poffices 的 Research Proposal Agent",
+    "goal": "",
+    "agent_type": "llm",
+    "agent_under_test": "Research Proposal"
+  }
+}

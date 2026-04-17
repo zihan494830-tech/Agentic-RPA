@@ -1,0 +1,28 @@
+{
+  "experiment_id": "exp-poffices-casestudy-b",
+  "scenario": "poffices-agent",
+  "scenario_spec_path": "poffices-agent.json",
+  "task_spec_ids": ["task-poffices-query"],
+  "extra": {
+    "orchestration_mode": "goal_driven",
+    "use_llm_planner": true,
+    "use_llm_task_description": true,
+    "use_llm_query": true,
+    "goal": "评估 HR 部门日程安排主题下 1 个 Agent 的能力",
+    "agent_descriptor": "Poffices HR Agent",
+    "agent_type": "llm",
+    "replan_on_failure": true,
+    "rpa_config": {
+      "mode": "robustness",
+      "fault_injection": {
+        "delay_prob": 0.0,
+        "error_prob": 0.0,
+        "missing_element_steps": [],
+        "timeout_steps": [2],
+        "timeout_step_ids": [],
+        "missing_element_step_ids": [],
+        "seed": 42
+      }
+    }
+  }
+}
