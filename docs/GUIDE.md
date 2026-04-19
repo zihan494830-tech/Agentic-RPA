@@ -132,7 +132,7 @@ playwright install
 ```bash
 pytest tests -v
 # Poffices 相关（不启动浏览器）
-pytest tests/test_poffices_agent.py tests/test_poffices_blocks.py tests/test_poffices_rpa_adapter.py -v
+pytest tests/test_poffices_agent.py tests/test_poffices_blocks.py tests/test_poffices_llm_agent.py -v
 ```
 
 ---
@@ -185,6 +185,32 @@ pytest tests/test_poffices_agent.py tests/test_poffices_blocks.py tests/test_pof
 
 ---
 
-## 7. 根目录规范
+## 7. 执行链路
 
-仅允许 README、pyproject.toml、requirements.txt、run_*.py、progress.json/html、docs/、raft/、scenarios/、scripts/、tests/、logs/ 等；禁止根目录无扩展名/随机命名文件及与 raft 子包同名的文件夹。详见 `.cursor/rules/no-random-files-in-root.mdc`。
+```
+实验配置 → create_poffices_agent(config)
+  → PofficesLLMAgent / PofficesAgent
+  → Orchestrator 每步 state + last_execution_result
+  → Agent.run() → tool_calls
+  → PofficesRPA.execute → BlockRegistry.execute(block_id, …) → Block.run()
+  → ExecutionResult → B5 → B8 评估落盘、多轮 LLM 总结报告
+```
+
+**Bootstrap 幂等**：登录 / Agent Master / Business Office 展开 / Market Analysis 选中 / Enable Agent Master Mode / Apply 均有「先检测再操作」；开关误关时 `_ensure_agent_master_mode_on` 自我纠正。详见 `raft/rpa/poffices_bootstrap.py`。
+
+---
+
+## 8. 近期变更记录
+
+| 主题 | 说明 |
+|------|------|
+| **LLM 驱动 Agent** | `raft/agents/poffices_llm_agent.py`：根据 state + last_execution_result 决定调哪个 Block；解析/API 异常时 fallback 到 PofficesAgent |
+| **配置驱动 Agent 类型** | `raft/agents/factory.py`：`create_poffices_agent(config)`，优先级 CLI > 配置 > 默认 rule；`experiment_poffices.json` 的 `extra.agent_type`、`agent_provider` |
+| **Bootstrap 幂等** | `_is_business_office_expanded`、`_is_apply_needed` 等；已展开/已选中/已开启则跳过 |
+| **Enable Agent Master 开关** | 检测逻辑改为取最后匹配节点再找 switch；点击后校验，误关则再点一次纠正 |
+
+---
+
+## 9. 根目录规范
+
+仅允许 README、pyproject.toml、requirements.txt、run_*.py、progress.json/html、docs/、raft/、scenarios/、scripts/、tests/、logs/ 等；禁止根目录无扩展名/随机命名文件及与 raft 子包同名的文件夹。

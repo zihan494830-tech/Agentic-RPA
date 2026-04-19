@@ -10,7 +10,7 @@
 ## 一、当前项目状态
 
 - **框架能力**：B1–B9 契约与实现已贯通；闭环 1（单 run 内 RPA ↔ Agent ↔ 状态）已落地；B8 评估、轨迹落盘、多 run、Poffices 固定/动态场景与 HTTP B1/B8/B9 均可使用。
-- **RPA 第三等级（L3，智能 RPA）**：**已基本实现**——在 ScenarioSpec 约束下，goal_driven 与 L3 规划器已接入主线；动态场景可通过 `run_poffices_agent.py` 使用 `--config experiment_poffices_dynamic` 与 `--goal` 做目标导向的流程组合。L3 的进一步细化（如更强的重规划、复合块等）见 [LEVEL3_INTELLIGENT_RPA.md](LEVEL3_INTELLIGENT_RPA.md)，**属后续优化，择机推进**。
+- **RPA 第三等级（L3，智能 RPA）**：**已基本实现**——在 ScenarioSpec 约束下，goal_driven 与 L3 规划器已接入主线；动态场景可通过 `run_poffices_agent.py` 使用 `--config experiment_poffices_dynamic` 与 `--goal` 做目标导向的流程组合。L3 的进一步细化（如更强的重规划、复合块等）见 [L3_INTELLIGENT_RPA.md](L3_INTELLIGENT_RPA.md)，**属后续优化，择机推进**。
 - **闭环 2（跨 run）**：评估结果驱动下一轮出题与 query 策略的部分已可用；「评估结果自动改写 B2/B3/B4 编排参数」等更深闭环**列为后续工作**，不在当前状态叙述中展开。
 
 ---
@@ -71,4 +71,4 @@ Block 职责与代码位置见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 - **Block 化**：B1–B9 接口清晰、可 mock、可单独测试。
 - **后续（不展开排期）**：闭环 2 与编排参数联动、实验流水线、可复现性与 L3 内部增强等，按需迭代。
 
-L3 设计细节与演进思路见 [LEVEL3_INTELLIGENT_RPA.md](LEVEL3_INTELLIGENT_RPA.md)。
+L3 设计细节与演进思路见 [L3_INTELLIGENT_RPA.md](L3_INTELLIGENT_RPA.md)。

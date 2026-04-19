@@ -77,13 +77,13 @@
 | **RPA 第三等级（L3）** | **已基本实现**：goal_driven、ScenarioSpec、L3 规划器已接入，可按目标动态组合流程；更细能力演进见下文设计文档。 |
 
 RPA 流程块化见 [RPA_BLOCKS.md](RPA_BLOCKS.md)、`raft/rpa/blocks.py`。  
-Scenario 设计见 [SCENARIO_DESIGN.md](SCENARIO_DESIGN.md)。L3 思路与后续可选增强见 [LEVEL3_INTELLIGENT_RPA.md](LEVEL3_INTELLIGENT_RPA.md)。
+Scenario 设计见 [SCENARIO_DESIGN.md](SCENARIO_DESIGN.md)。L3 思路与后续可选增强见 [L3_INTELLIGENT_RPA.md](L3_INTELLIGENT_RPA.md)。
 
 ---
 
 ## 7. RPA 等级
 
-项目已覆盖 **第二等级（基于模块的 RPA）** 与 **第三等级（智能 RPA）** 的主线能力：第三等级下 goal_driven + ScenarioSpec + L3 规划器已接入；可选增强（如重规划、复合块等）见 [LEVEL3_INTELLIGENT_RPA.md](LEVEL3_INTELLIGENT_RPA.md)，**后续优化择机推进**。
+项目已覆盖 **第二等级（基于模块的 RPA）** 与 **第三等级（智能 RPA）** 的主线能力：第三等级下 goal_driven + ScenarioSpec + L3 规划器已接入；可选增强（如重规划、复合块等）见 [L3_INTELLIGENT_RPA.md](L3_INTELLIGENT_RPA.md)，**后续优化择机推进**。
 
 ---
 

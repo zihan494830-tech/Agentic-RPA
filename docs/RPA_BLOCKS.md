@@ -139,6 +139,25 @@ run_startup_validation(block_catalog, registry)  # 默认 warning；abort_on_mis
 | `raft/rpa/poffices_blocks.py` | Poffices Block 实现与注册（`register_poffices_blocks()`） |
 | `raft/rpa/poffices_rpa.py` | B7：`execute()` 内优先走 BlockRegistry |
 | `raft/core/block_management.py` | 可选工具：校验与 catalog 生成 |
-| `docs/BLOCK_MANAGEMENT_DESIGN.md` | Block 管理标准化方案设计文档 |
 
 新增 Block：在对应 `*_blocks.py` 实现并注册；在场景 JSON 中补 `allowed_blocks` 条目；补单测。
+
+---
+
+## 8. 管理分层与兼容性
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Layer 1: BlockRegistry（执行层）                    │
+│  register / unregister / register_block / execute   │
+├─────────────────────────────────────────────────────┤
+│  Layer 2: BlockCatalog（配置层）                     │
+│  ScenarioSpec.allowed_blocks / extra.block_catalog  │
+├─────────────────────────────────────────────────────┤
+│  Layer 3: 校验与桥接（可选）                          │
+│  validate_catalog_against_registry()                │
+│  build_catalog_from_registry()                      │
+└─────────────────────────────────────────────────────┘
+```
+
+**兼容性保证**：`register()`、`get()`、`list_blocks()`、`execute()`、`resolve_block_catalog()`、场景 JSON 格式均不变；新增的 `unregister`、`register_block`、校验工具为增量可选扩展。

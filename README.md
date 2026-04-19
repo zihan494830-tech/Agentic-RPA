@@ -1,11 +1,72 @@
-# ART — Agentic RPA Testing Framework for Agent Systems
+# ART — Agentic RPA Testing Framework
 
-在真实业务环境（通过 RPA/浏览器自动化接入）中，**以本框架为主体**，通过识别任务难度、编排工作流与 RPA/多 Agent，**对「待测 Agent」进行多维度测试**，并产出轨迹与评估报告；而非仅根据待测 Agent 的输出做事后分析。
+**ART 是一个用于测试 AI Agent 的自动化测试框架**，通过真实浏览器（RPA）驱动目标平台，自动出题、执行、评估并生成报告，而不是事后分析 Agent 的输出。
 
-**架构理念**：ART 当测试器（出题 + 给环境 + 判卷），待测 Agent 当考生，RPA 当环境/手脚，评估层当裁判。
+> **适用场景**：你有一个部署在 Web 平台上的 AI Agent，想用自动化测试验证它在真实任务中的表现。ART 代替人工，自动打开浏览器、操作页面、给 Agent 出题、观察结果、评分。
 
-- **待测 Agent**：**被测对象**。Poffices 场景下即 **Poffices 页面上的 Agent**（如 Research Proposal、Market Analysis），由 `app_ready` 的 `options.agent_name` 或配置/任务描述指定。B6 中运行的决策逻辑（PofficesAgent、PofficesLLMAgent、MockAgent 等）称为 **B6 决策组件**，负责驱动流程并对待测 Agent 进行测试。术语详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#2-术语待测-agent-vs-b6-决策组件)。
-- **LLM 在框架中的角色**：LLM **仅接入 Orchestrator 层**（如 B2 的 `routing_llm` 做 single_flow / multi_flow 路由），用于辅助组织测试。
+---
+
+## 快速开始
+
+### 方式一：无浏览器（运行单测，验证框架逻辑）
+
+```bash
+git clone https://github.com/zihan494830-tech/Agentic-RPA.git
+cd Agentic-RPA
+pip install -e .
+pytest tests -v          # 使用 MockRPA，不需要浏览器，约 30 秒跑完
+```
+
+### 方式二：启动 HTTP 服务（Swagger UI 交互测试）
+
+```bash
+pip install -e .
+python run_server.py     # 启动后访问 http://127.0.0.1:8000/docs
+```
+
+### 方式三：完整端到端测试（需要 Poffices 账号 + LLM API Key）
+
+```bash
+pip install ".[phase1]"
+playwright install chromium
+cp .env.example .env     # 填入 POFFICES_USERNAME、POFFICES_PASSWORD、SILICONFLOW_API_KEY
+python run_poffices_agent.py --runs 1
+# 完成后查看 logs/poffices/run_report.html
+```
+
+---
+
+## 环境要求
+
+| 项目 | 要求 |
+|------|------|
+| Python | 3.10+ |
+| 操作系统 | Windows / macOS / Linux |
+| 浏览器（方式三） | Chromium（由 `playwright install` 自动安装） |
+| Poffices 账号（方式三） | 需要有 [Poffices.ai](https://b1s2.hkrnd.com/) 的登录凭据 |
+| LLM API Key（方式三） | SiliconFlow / Qwen / Grok 任一，用于 LLM 出题与评估 |
+
+`.env` 最小配置（方式三）：
+
+```env
+POFFICES_USERNAME=你的用户名
+POFFICES_PASSWORD=你的密码
+RAFT_LLM_PROVIDER=siliconflow
+SILICONFLOW_API_KEY=你的_api_key
+```
+
+---
+
+## 核心概念
+
+| 术语 | 含义 |
+|------|------|
+| **待测 Agent** | 被测对象，即 Poffices 页面上的 AI Agent（如 Research Proposal） |
+| **RPA** | 浏览器自动化（Robotic Process Automation），ART 用它操作页面 |
+| **B1–B9** | 框架内部的功能模块（Block），如 B1 加载配置、B7 执行 RPA、B8 评估 |
+| **Orchestrator** | 调度器，按计划依次调用各 Block 完成一轮测试 |
+| **L3 智能 RPA** | 目标驱动模式：输入自然语言目标，框架自动规划测试步骤 |
+| **MockRPA** | 模拟 RPA，不打开浏览器，用于单元测试 |
 
 ---
 
@@ -15,19 +76,11 @@
 
 | 文档 | 内容 |
 |------|------|
-| [**架构与项目结构**](docs/ARCHITECTURE.md) | 项目定位、四层架构、两个闭环、B1–B9 Block（含代码位置）、仓库结构、**项目状态与 L3** |
-| [**实施计划**](docs/IMPLEMENTATION_PLAN.md) | **当前项目状态**、闭环策略、Block 依赖与单测摘要；L3 已基本实现，后续优化见文内 |
-| [**使用与测试指南**](docs/GUIDE.md) | 安装与运行、服务地址与 ngrok、Poffices 固定/动态场景、测试命令、评估与报告、根目录规范 |
+| [**架构与项目结构**](docs/ARCHITECTURE.md) | 项目定位、四层架构、两个闭环、B1–B9 Block（含代码位置）、仓库结构 |
+| [**使用与测试指南**](docs/GUIDE.md) | 安装运行、Poffices 场景、三种运行模式、报告生成、近期变更 |
 | [**API 契约**](docs/API_CONTRACT.md) | 统一 Block API 格式（请求/响应、错误、版本）、B1/B8/B9 HTTP 暴露 |
-| [**当前状态与变更**](docs/STATUS.md) | Poffices 配置、入口、链路、Bootstrap 幂等、近期与历史变更 |
-
----
-
-## 核心设计要点
-
-- **Orchestrator 可配置**：难度与路由、DAG 工作流、单/多 Agent 编排、goal_driven + L3 规划均可作为实验变量。
-- **两个闭环**：闭环 1 已落地（RPA ↔ Agent）；闭环 2 部分可用（评估 → 下一轮出题/策略），更深联动列为后续优化。详见 [架构](docs/ARCHITECTURE.md)。
-- **Block 化**：B1–B9 接口先行、可 mock、可单独测试。详见 [架构](docs/ARCHITECTURE.md)。
+| [**L3 智能 RPA**](docs/L3_INTELLIGENT_RPA.md) | 目标驱动设计、多 Agent 支持、动态发现、已落地能力与验收用例 |
+| [**实施计划**](docs/IMPLEMENTATION_PLAN.md) | 当前项目状态、闭环策略、Block 依赖与单测摘要 |
 
 ---
 
@@ -35,80 +88,57 @@
 
 | 说明 | 内容 |
 |------|------|
-| **框架** | B1–B9 与闭环 1 已贯通；B8、多 run、Poffices、HTTP 服务可用。 |
-| **RPA 第三等级（L3）** | **已基本实现**：目标导向、动态场景（`experiment_poffices_dynamic` + `--goal`）、ScenarioSpec 与 L3 规划器已接入主线；更细增强见 [LEVEL3_INTELLIGENT_RPA.md](docs/LEVEL3_INTELLIGENT_RPA.md)，**后续优化择机推进**。 |
-| **主线入口** | `run_poffices_agent.py`（固定场景 / 动态场景 `--config experiment_poffices_dynamic --goal "..."`）。 |
-
-实施计划与依赖摘要见 [实施计划](docs/IMPLEMENTATION_PLAN.md)。
+| **框架** | B1–B9 与闭环 1 已贯通；B8、多 run、Poffices、HTTP 服务可用 |
+| **RPA 第三等级（L3）** | **已基本实现**：目标导向、动态场景（`--config experiment_poffices_dynamic --goal "..."`）、ScenarioSpec 与 L3 规划器已接入主线；更细增强见 [L3_INTELLIGENT_RPA.md](docs/L3_INTELLIGENT_RPA.md) |
+| **主线入口** | `run_poffices_agent.py`（固定场景 / 动态场景） |
 
 ---
 
-## 默认真实 RPA（Playwright）
+## HTTP 服务
 
-- **Orchestrator、演示脚本、HTTP B9** 默认使用 **PlaywrightRPA**（真实浏览器）；未安装 `playwright` 时自动回退到 MockRPA。
-- **MockRPA 仅用于**：单测（`tests/`）以保证稳定、无头环境可跑。其余开发与运行均基于真实浏览器。
-- 安装真实 RPA：`pip install ".[phase1]"` 且 `playwright install`。
+```bash
+python run_server.py     # http://127.0.0.1:8000
+                         # Swagger UI: http://127.0.0.1:8000/docs
+ngrok http 8000          # 公网访问（将生成的 URL 发给协作者）
+```
 
-## 安装与运行
+**Postman 示例 — B9 跑一轮任务**：
 
-- **安装依赖**：在项目根目录执行 `pip install -e .` 或 `pip install -r requirements.txt`；要默认用真实浏览器再加 `pip install ".[phase1]"` 与 `playwright install`。
-- **运行测试**：`pytest tests -v`（单测用 MockRPA，保证可重复、不依赖浏览器）。
-- **代码结构**：契约与 Block 实现位于 `raft/`（`raft/rpa` 默认 `get_default_rpa()` → PlaywrightRPA，`raft/orchestrator` B9）。
+```http
+POST http://127.0.0.1:8000/api/v1/b9/run
+Content-Type: application/json
 
----
+{
+  "request_id": "req-001",
+  "block_id": "B9",
+  "payload": {
+    "config_path": "scenarios/experiment_poffices.json",
+    "task_spec_path": "scenarios/task_specs.json",
+    "task_spec_id": "task-poffices-query",
+    "max_steps": 5
+  }
+}
+```
 
-## HTTP 服务（Postman / FastAPI 文档测试）
-
-- **启动服务**：在项目根目录执行 `python run_server.py`（需已安装依赖：`pip install -e .` 或 `pip install -r requirements.txt`）。
-- **服务地址**：**`http://127.0.0.1:8000`**（文档：`http://127.0.0.1:8000/docs`，健康检查：`http://127.0.0.1:8000/health`）。
-- **公网访问**：使用 ngrok 时执行 `ngrok http 8000`，将生成的 `https://xxx.ngrok-free.app` 作为 Base URL 填入其他平台的 API 管理（仅填根地址，不填 `/docs`）。
-- **Swagger 文档**：浏览器打开 `http://127.0.0.1:8000/docs`，可直接在页面上试调 B1、B8、B9。
-- **Postman 测试**：
-  - **B1 加载配置**：`POST http://127.0.0.1:8000/api/v1/b1/load_config`，Body 选 raw JSON，示例：
-    ```json
-    {
-      "request_id": "req-001",
-      "block_id": "B1",
-      "api_version": "v1",
-      "payload": {
-        "config_path": "scenarios/experiment_poffices.json",
-        "task_spec_path": "scenarios/task_specs.json",
-        "task_spec_id": "task-poffices-query"
-      }
-    }
-    ```
-  - **B8 评估轨迹**：`POST http://127.0.0.1:8000/api/v1/b8/evaluate`，Body：`{ "trajectory": [...], "task_spec": {...}, "run_id": "可选" }`，返回 RunMetrics。
-  - **B9 跑一轮任务**：`POST http://127.0.0.1:8000/api/v1/b9/run`，Body 示例（用文件路径）：
-    ```json
-    {
-      "request_id": "req-002",
-      "block_id": "B9",
-      "payload": {
-        "config_path": "scenarios/experiment_poffices.json",
-        "task_spec_path": "scenarios/task_specs.json",
-        "task_spec_id": "task-poffices-query",
-        "max_steps": 5
-      }
-    }
-    ```
-  路径为相对项目根目录；返回中 `data` 含 `trajectory`、`steps_run`、`step2_agent_input_contains_step1_execution_result`。
+更多接口示例见 [docs/GUIDE.md](docs/GUIDE.md) 与 [docs/API_CONTRACT.md](docs/API_CONTRACT.md)。
 
 ---
 
-## 已实现能力（闭环 1 + B8 + Poffices + L3）
+## 架构概览
 
-- **闭环 1 验证**：Mock RPA 可配置 `fail_steps` / `timeout_steps`；真实 RPA 为 PlaywrightRPA（需 `pip install ".[phase1]"` 且 `playwright install`）。B8 最小评估：轨迹落盘、任务成功/失败、步骤数；Orchestrator 传入 `run_id` 与 `log_dir` 时自动落盘并返回 `metrics`。
-- **B6**：MockAgent、PofficesAgent、PofficesLLMAgent；B1 场景为 `scenarios/experiment_poffices.json`、`experiment_poffices_dynamic.json` 等。
-- **Poffices 端到端**：通过 `run_poffices_agent.py --runs N [--config experiment_poffices_dynamic --goal "..."]`，在真实 Poffices 场景下完成单/多轮 L3 智能 RPA 流程，并产出报告。
-- **进度与数据流**：`python scripts/visualize_progress.py` 生成 `progress.html` / `progress.json`。
+```
+ART 框架（出题 + 给环境 + 判卷）
+├── B1  加载实验配置与任务规格
+├── B2  评估任务难度与路由策略
+├── B3  构建执行 DAG
+├── B4  分配 Agent 与步骤
+├── B5  管理执行状态与轨迹
+├── B6  决策组件（驱动测试流程的逻辑）
+├── B7  RPA 执行层（Playwright 操作真实浏览器）
+├── B8  评估层（轨迹分析、LLM 判分）
+└── B9  Orchestrator（总调度，串联 B1–B8）
 
-## Poffices 待测 Agent（B6 + B7）
+待测 Agent（被测对象，运行在 Poffices 页面上）
+```
 
-将 [Poffices.ai](https://b1s2.hkrnd.com/) **页面上的 Agent**（如 Research Proposal、Market Analysis）作为**待测 Agent** 接入 ART：B6 使用 **PofficesAgent** 或 **PofficesLLMAgent**（决策组件）驱动流程，B7 使用 **PofficesRPA** 在真实 Poffices 页面上执行 tool_calls，闭环 1 + B8 轨迹落盘与评估。
-
-- **前置**：`.env` 中配置 `POFFICES_USERNAME`、`POFFICES_PASSWORD`；安装 `pip install ".[phase1]"` 且 `playwright install`。若实验配置中 `extra.use_llm_query` 为 true，需配置 `OPENAI_API_KEY` 或 `XAI_API_KEY`（Grok）供 LLM 出题。
-- **统一入口（支持单/多轮）**：`python run_poffices_agent.py --runs N`
-  - 单轮：`python run_poffices_agent.py --runs 1`
-  - 多轮：`python run_poffices_agent.py --runs 3`
-  - 同一浏览器会话内首轮 bootstrap + query，后续轮次 New question + 新 query，轨迹写入 `logs/poffices/`，输出 `run_report.html`（当 `--runs 1` 自动呈现本轮视图）。
-- **Bootstrap（登录 → 选 Agent）**：`python scripts/run_poffices_bootstrap.py`（见 [GUIDE · Poffices Bootstrap](docs/GUIDE.md#15-pofficesai-rpa-bootstrap登录--选-agent)）。
+详细架构见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
