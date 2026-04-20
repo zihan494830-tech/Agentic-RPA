@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 logger = logging.getLogger(__name__)
@@ -358,6 +358,138 @@ def _openai_chat_completion_dict(
     return out
 
 
+def _sse_chat_completion_stream(
+    *,
+    content: str,
+    model: str | None = None,
+    extracted_data: dict[str, Any] | None = None,
+):
+    """SSE 流式响应生成器：返回 OpenAI chat.completion.chunk 格式。
+
+    Poffices 的 Custom Block LLM 客户端默认以 stream 模式调用，期望 SSE 事件流
+    （data: {...}\\n\\n，最后 data: [DONE]）。若返回普通 JSON，客户端会报
+    "Failed to fetch stream: Bad Request" 并重试，导致 RPA 被反复触发。
+    """
+    chat_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+    created = int(time.time())
+    model_name = (
+        (model if isinstance(model, str) and model.strip() else None)
+        or os.environ.get("RAFT_LLM_MODEL")
+        or os.environ.get("QWEN_MODEL")
+        or "deepseek-v3"
+    )
+
+    def _chunk(delta: dict[str, Any], finish_reason: str | None, include_extracted: bool = False) -> str:
+        payload: dict[str, Any] = {
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model_name,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": finish_reason,
+                }
+            ],
+        }
+        if include_extracted and extracted_data is not None:
+            payload["extracted_data"] = extracted_data
+        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    # 1. role 块 → 2. content 块 → 3. finish 块 → 4. [DONE]
+    yield _chunk({"role": "assistant"}, None)
+    yield _chunk({"content": content}, None)
+    yield _chunk({}, "stop", include_extracted=True)
+    yield "data: [DONE]\n\n"
+
+
+def _sse_chunk_payload(
+    *,
+    chat_id: str,
+    created: int,
+    model_name: str,
+    delta: dict[str, Any],
+    finish_reason: str | None = None,
+    extracted_data: dict[str, Any] | None = None,
+) -> str:
+    payload: dict[str, Any] = {
+        "id": chat_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model_name,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+    if extracted_data is not None:
+        payload["extracted_data"] = extracted_data
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+async def _sse_run_with_heartbeat(
+    req: "PofficesRunRequest",
+    *,
+    model: str | None,
+    heartbeat_sec: float = 5.0,
+    body_chunk_size: int = 2000,
+):
+    """边跑 RPA 边推 SSE 真 content delta（而不是 SSE 注释）。
+
+    关键点（对齐已验证可用的参考实现）：
+    - 心跳用 ``content="."`` 真 delta，而不是 ``: keepalive\\n\\n`` 注释：
+      Poffices 客户端会把后者当作"流无进展"而判定异常并重试。
+    - 最终结果按 ``body_chunk_size`` 字符分段推送，避免一次性大 chunk 被中间代理截断/缓冲。
+    - chunk payload 只保留 ``id/choices[delta,finish_reason]``，去掉 ``object/created/model`` 等
+      Poffices 可能不处理的字段，减小匹配面。
+    """
+    import asyncio
+
+    resp_id = f"chatcmpl-{int(time.time())}"
+
+    def _make_chunk(
+        content: str | None = None,
+        finish: bool = False,
+        extracted: dict[str, Any] | None = None,
+    ) -> str:
+        delta = {"content": content} if content is not None else {}
+        payload: dict[str, Any] = {
+            "id": resp_id,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": "stop" if finish else None,
+                }
+            ],
+        }
+        if extracted is not None:
+            payload["extracted_data"] = extracted
+        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    # 立即推首段可见内容，让 Poffices 认定流已开始产出
+    yield _make_chunk(content="🤖 RPA 测试启动...\n")
+
+    loop = asyncio.get_running_loop()
+    task = loop.run_in_executor(None, _execute_run_sync, req)
+
+    # 边跑边推 "." 维持流进展
+    while True:
+        try:
+            resp = await asyncio.wait_for(asyncio.shield(task), timeout=heartbeat_sec)
+            break
+        except asyncio.TimeoutError:
+            yield _make_chunk(content=".")
+
+    resp_dict = resp.model_dump()
+    body = json.dumps(resp_dict, ensure_ascii=False)
+
+    yield _make_chunk(content="\n\n")
+    for i in range(0, len(body), body_chunk_size):
+        yield _make_chunk(content=body[i : i + body_chunk_size])
+
+    yield _make_chunk(content="", finish=True, extracted=resp_dict)
+    yield "data: [DONE]\n\n"
+
+
 # ── 路由处理 ────────────────────────────────────────────────────────────────
 
 _DEFAULT_BLOCK_CATALOG: list[dict[str, Any]] = [
@@ -579,7 +711,22 @@ async def poffices_plan(request: Request) -> PofficesPlanResponse | JSONResponse
         _append_trace({"event": "invalid_root", "type": type(raw).__name__})
         raise HTTPException(status_code=400, detail="JSON body must be an object")
 
-    _append_trace({"event": "request_in", "raw_preview": _truncate(json.dumps(raw, ensure_ascii=False))})
+    _plan_hdrs = {
+        k: request.headers.get(k)
+        for k in (
+            "user-agent", "x-forwarded-for", "x-real-ip", "origin", "referer",
+            "x-request-id", "x-correlation-id", "x-poffices-agent-id",
+            "x-poffices-run-id", "x-poffices-node-id", "host",
+            "cf-connecting-ip", "forwarded",
+        )
+        if request.headers.get(k)
+    }
+    _append_trace({
+        "event": "request_in",
+        "client": getattr(request.client, "host", None),
+        "headers": _plan_hdrs,
+        "raw_preview": _truncate(json.dumps(raw, ensure_ascii=False)),
+    })
 
     normalized = _coerce_bools(_normalize_body_for_plan(raw))
     openai_compat = _wants_openai_chat_completion(raw)
@@ -610,11 +757,22 @@ async def poffices_plan(request: Request) -> PofficesPlanResponse | JSONResponse
     if openai_compat:
         resp_dict = resp.model_dump()
         body = json.dumps(resp_dict, ensure_ascii=False)
+        model_name = raw.get("model") if isinstance(raw.get("model"), str) else None
+        if bool(raw.get("stream")):
+            _append_trace({"event": "response_sse_stream", "request_id": req.request_id})
+            return StreamingResponse(
+                _sse_chat_completion_stream(
+                    content=body,
+                    model=model_name,
+                    extracted_data=resp_dict,
+                ),
+                media_type="text/event-stream",
+            )
         _append_trace({"event": "response_openai_chat_completion", "request_id": req.request_id})
         return JSONResponse(
             _openai_chat_completion_dict(
                 content=body,
-                model=raw.get("model") if isinstance(raw.get("model"), str) else None,
+                model=model_name,
                 extracted_data=resp_dict,
             )
         )
@@ -775,7 +933,11 @@ def _execute_run_sync(req: PofficesRunRequest) -> PofficesRunResponse:
         # 用请求参数覆盖 extra
         config.extra["goal"] = req.goal
         config.extra["orchestration_mode"] = "goal_driven"
-        config.extra["use_llm_planner"] = True
+        # Poffices API 专用：单 agent 强制使用规则 planner（固定 3 步，防止 LLM planner
+        # 多规划几轮导致待测 agent 被反复调用）；多 agent 仍启用 LLM planner 协调顺序。
+        # 注意：此覆盖仅影响 /run 接口，不影响本地 run_poffices_agent.py 的开发流程。
+        _n_agents_for_planner = len(req.agents_to_test) if req.agents_to_test else 1
+        config.extra["use_llm_planner"] = _n_agents_for_planner > 1
 
         if req.llm_provider:
             config.extra["llm_provider"] = req.llm_provider
@@ -784,8 +946,31 @@ def _execute_run_sync(req: PofficesRunRequest) -> PofficesRunResponse:
             config.extra["llm_model"] = req.llm_model
             config.extra["agent_model"] = req.llm_model
 
-        # 处理 agents_to_test
+        # 处理 agents_to_test：
+        # 未显式传时，用 goal_interpreter 从 goal 里抽取（否则会永远 fallback 到 Research Proposal）。
+        # 候选 agent 列表显式传入，不依赖 goal_interpreter 的内置 _FALLBACK_AGENTS，保持 poffices 独立。
         agents = req.agents_to_test or []
+        if not agents and req.goal:
+            try:
+                from raft.core.goal_interpreter import interpret_goal
+                _poffices_available_agents = [
+                    # Business Office
+                    "Problem Statement", "Ideation", "Feasibility Analysis",
+                    "Market Analysis", "Competitive Analysis", "Business Forecasting",
+                    # 常见 Research / 其他 Office
+                    "Research Proposal", "Project Proposal", "Marketing Plan",
+                    "Business Forecasting Objective",
+                ]
+                _intent = interpret_goal(
+                    req.goal,
+                    available_agents=_poffices_available_agents,
+                    provider=req.llm_provider,
+                    model=req.llm_model,
+                )
+                if _intent.agents:
+                    agents = [a for a in _intent.agents if isinstance(a, str) and a.strip()]
+            except Exception as _exc:
+                logger.warning("[poffices /run] goal_interpreter 解析失败，回退默认 agent：%s", _exc)
         if agents:
             config.extra["agents_to_test"] = agents
             config.extra["agent_under_test"] = agents[0]
@@ -808,9 +993,10 @@ def _execute_run_sync(req: PofficesRunRequest) -> PofficesRunResponse:
         else:
             config.extra["use_llm_query"] = True
 
-        # 多 Agent 时步数上限
+        # Poffices API 专用：步数上限 = 每 agent 3 步 + 2 步容错（replan/retry）。
+        # 比本地开发的宽松上限更严格，防止单 agent 场景下 orchestrator 跑超过一轮。
         n_agents = len(agents) if agents else 1
-        max_steps = max(10, n_agents * 3 + 4)
+        max_steps = n_agents * 3 + 2
 
         rpa = get_default_rpa(backend="poffices", headless=False, timeout_ms=30_000, query_wait_sec=240)
 
@@ -929,7 +1115,22 @@ async def poffices_run(request: Request) -> PofficesRunResponse | JSONResponse:
     if not isinstance(raw, dict):
         raise HTTPException(status_code=400, detail="JSON body must be an object")
 
-    _append_trace({"event": "run_request_in", "raw_preview": _truncate(json.dumps(raw, ensure_ascii=False))})
+    _hdrs = {
+        k: request.headers.get(k)
+        for k in (
+            "user-agent", "x-forwarded-for", "x-real-ip", "origin", "referer",
+            "x-request-id", "x-correlation-id", "x-poffices-agent-id",
+            "x-poffices-run-id", "x-poffices-node-id", "authorization",
+            "host", "cf-connecting-ip", "forwarded",
+        )
+        if request.headers.get(k)
+    }
+    _append_trace({
+        "event": "run_request_in",
+        "client": getattr(request.client, "host", None),
+        "headers": _hdrs,
+        "raw_preview": _truncate(json.dumps(raw, ensure_ascii=False)),
+    })
 
     # 兼容 OpenAI Chat 形态：从 messages 里提取 goal；与 /plan 保持相同的归一化链路
     normalized = _coerce_bools(_normalize_body_for_plan(raw))
@@ -940,7 +1141,19 @@ async def poffices_run(request: Request) -> PofficesRunResponse | JSONResponse:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
     openai_compat = raw.get("response_envelope") != "native"
+    is_stream = bool(raw.get("stream"))
+    model_name = raw.get("model") if isinstance(raw.get("model"), str) else None
 
+    # 流式路径：边跑边推心跳，避免 ngrok/Poffices 空闲超时切断连接
+    if openai_compat and is_stream:
+        _append_trace({"event": "response_sse_stream", "request_id": req.request_id})
+        return StreamingResponse(
+            _sse_run_with_heartbeat(req, model=model_name),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # 非流式路径：老逻辑
     loop = asyncio.get_running_loop()
     resp = await loop.run_in_executor(None, _execute_run_sync, req)
 
@@ -951,7 +1164,532 @@ async def poffices_run(request: Request) -> PofficesRunResponse | JSONResponse:
         return JSONResponse(
             _openai_chat_completion_dict(
                 content=body,
-                model=raw.get("model") if isinstance(raw.get("model"), str) else None,
+                model=model_name,
+                extracted_data=resp_dict,
+            )
+        )
+    return resp
+
+
+# ── /run_full：完整本地流水线（多轮 + LLM 报告 → HTML 作为 content） ──────────
+
+
+class PofficesRunFullRequest(PofficesRunRequest):
+    """完整本地流水线请求：支持多轮，返回 HTML 报告作为 content。"""
+    rounds: int = Field(default=1, ge=1, le=10, description="执行轮数（对齐本地 --runs）")
+    use_llm_summary: bool = Field(
+        default=True,
+        description="是否调用 LLM 生成多轮分析总结（对齐本地 --full-report）",
+    )
+    minimal_report: bool = Field(
+        default=False,
+        description="True 则不出 LLM 总结与判分，只出结构化 HTML（对齐本地 mini 报告）",
+    )
+
+
+class PofficesRunFullData(BaseModel):
+    """完整流水线结果：HTML 报告 + 每轮结构化信息。"""
+    run_id: str
+    success: bool = Field(description="所有轮全部成功才为 True")
+    rounds_run: int
+    agent_results: list[AgentTestResult] = Field(default_factory=list)
+    metrics_per_round: list[dict[str, Any]] = Field(default_factory=list)
+    report_html: str = Field(default="", description="完整 HTML 报告（与本地 run_report.html 等价）；SSE 路径下会被清空以减小 payload")
+    report_url: str = Field(default="", description="公开可访问的 HTML 报告 URL，供 Poffices 画布下游节点拼 markdown 链接")
+    llm_summary: str | None = Field(default=None, description="LLM 多轮分析总结（若启用）")
+    report_path: str | None = Field(default=None, description="服务器端落盘路径，便于排查")
+
+
+class PofficesRunFullResponse(BaseModel):
+    request_id: str
+    api_version: str = "v1"
+    code: str
+    data: PofficesRunFullData | None = None
+    error: PofficesError | None = None
+
+
+def _previous_rounds_for_api(results: list[dict]) -> list[dict]:
+    """从多轮 results 构建 previous_rounds（给 query_suggester 感知历史）。
+
+    精简版：复用 run_poffices_agent._previous_rounds_from_results 的字段子集；
+    不包含 failed_steps 等细粒度分析，保持 API 侧零额外依赖。
+    """
+    rounds: list[dict] = []
+    for r in results:
+        metrics = r.get("metrics") or {}
+        if not isinstance(metrics, dict):
+            metrics = {}
+        # 取该轮实际发送的 query：首个 send_query.params.query
+        q = ""
+        for entry in r.get("trajectory") or []:
+            for tc in (entry.get("step_result") or {}).get("tool_calls") or []:
+                if tc.get("tool_name") == "send_query":
+                    qv = (tc.get("params") or {}).get("query")
+                    if isinstance(qv, str) and qv.strip():
+                        q = qv
+                        break
+            if q:
+                break
+        rounds.append({
+            "query": q,
+            "success": metrics.get("success"),
+            "step_count": metrics.get("step_count"),
+            "details": metrics.get("details"),
+            "llm_judge": metrics.get("llm_judge"),
+            "execution_success_rate": metrics.get("execution_success_rate"),
+            "retry_count": metrics.get("retry_count"),
+            "timeout_count": metrics.get("timeout_count"),
+        })
+    return rounds
+
+
+def _execute_run_full_sync(req: PofficesRunFullRequest) -> PofficesRunFullResponse:
+    """同步执行完整流水线：多轮 RPA + LLM 多轮总结 + HTML 报告。"""
+    from pathlib import Path as _Path
+
+    _BASE = _Path(__file__).resolve().parent.parent.parent
+    scenarios_dir = _BASE / "scenarios"
+    log_dir = _BASE / "logs" / "poffices_api_run_full"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    run_id = req.request_id
+    _append_trace({"event": "run_full_start", "request_id": run_id, "rounds": req.rounds, "goal": req.goal[:200]})
+
+    try:
+        from raft.core.config.loader import load_experiment_config, load_task_spec
+        from raft.orchestrator.runner import Orchestrator
+        from raft.reporting import build_report_with_llm
+        from raft.rpa import get_default_rpa
+
+        config_path = scenarios_dir / "experiment_poffices_dynamic.json"
+        task_spec_path = scenarios_dir / "task_specs.json"
+        config = load_experiment_config(config_path)
+        task = load_task_spec(task_spec_path, config.task_spec_ids[0])
+
+        config.extra["goal"] = req.goal
+        config.extra["orchestration_mode"] = "goal_driven"
+
+        _n_agents_for_planner = len(req.agents_to_test) if req.agents_to_test else 1
+        config.extra["use_llm_planner"] = _n_agents_for_planner > 1
+
+        if req.llm_provider:
+            config.extra["llm_provider"] = req.llm_provider
+            config.extra["agent_provider"] = req.llm_provider
+        if req.llm_model:
+            config.extra["llm_model"] = req.llm_model
+            config.extra["agent_model"] = req.llm_model
+
+        # agents_to_test 解析（与 /run 保持一致）
+        agents = req.agents_to_test or []
+        if not agents and req.goal:
+            try:
+                from raft.core.goal_interpreter import interpret_goal
+                _available = [
+                    "Problem Statement", "Ideation", "Feasibility Analysis",
+                    "Market Analysis", "Competitive Analysis", "Business Forecasting",
+                    "Research Proposal", "Project Proposal", "Marketing Plan",
+                    "Business Forecasting Objective",
+                ]
+                _intent = interpret_goal(
+                    req.goal,
+                    available_agents=_available,
+                    provider=req.llm_provider,
+                    model=req.llm_model,
+                )
+                if _intent.agents:
+                    agents = [a for a in _intent.agents if isinstance(a, str) and a.strip()]
+            except Exception as _exc:
+                logger.warning("[poffices /run_full] goal_interpreter 解析失败：%s", _exc)
+
+        if agents:
+            config.extra["agents_to_test"] = agents
+            config.extra["agent_under_test"] = agents[0]
+            config.extra["agent_descriptor"] = (
+                f"Poffices 的 {agents[0]} Agent"
+                if len(agents) == 1
+                else f"Poffices 的 {len(agents)} 个 Agent（{', '.join(agents[:3])}）"
+            )
+        else:
+            config.extra["agent_under_test"] = config.extra.get("agent_under_test") or "Research Proposal"
+            config.extra["agent_descriptor"] = config.extra.get("agent_descriptor") or "Poffices 的 Research Proposal Agent"
+
+        if req.query:
+            config.extra["use_llm_query"] = False
+            task = task.model_copy(update={"initial_state": {**task.initial_state, "query": req.query}})
+        else:
+            config.extra["use_llm_query"] = True
+
+        n_agents = len(agents) if agents else 1
+        max_steps = n_agents * 3 + 2
+
+        rpa = get_default_rpa(backend="poffices", headless=False, timeout_ms=30_000, query_wait_sec=240)
+
+        results: list[dict] = []
+        try:
+            for i in range(req.rounds):
+                orch = Orchestrator(
+                    max_steps=max_steps,
+                    rpa=rpa,
+                    orchestration_mode="goal_driven",
+                )
+                sub_run_id = f"{run_id}-r{i + 1}"
+
+                query_context: dict[str, Any] = {}
+                if i > 0 and results:
+                    prev_rounds = _previous_rounds_for_api(results)
+                    query_context["previous_rounds"] = prev_rounds
+                    query_context["previous_queries"] = [r.get("query") for r in prev_rounds if r.get("query")]
+                    if i == 1:
+                        query_context["multi_round_strategy"] = "diversify"
+                        query_context["policy_hint"] = "本轮请换一个与上一轮完全不同的领域或话题，以考察 Agent 的多样化能力。"
+                    elif i >= 2 and req.rounds >= 3:
+                        try:
+                            from raft.core.query_policy import decide_next_strategy
+                            strategy, policy_hint = decide_next_strategy(prev_rounds)
+                            query_context["multi_round_strategy"] = strategy
+                            query_context["policy_hint"] = policy_hint
+                        except Exception:
+                            pass
+
+                result = orch.run_until_done(
+                    config,
+                    task,
+                    run_id=sub_run_id,
+                    log_dir=log_dir,
+                    query_context=query_context or None,
+                )
+                if isinstance(result, dict):
+                    result["run_id"] = sub_run_id
+                results.append(result)
+        finally:
+            rpa.close()
+
+        # 报告生成
+        task_for_report = (results[-1].get("task_spec_effective") if results else None) or task.model_dump()
+        config_dump = config.model_dump()
+        report_path = log_dir / f"{run_id}.html"
+        _use_llm_summary = req.use_llm_summary and not req.minimal_report
+        out = build_report_with_llm(
+            results,
+            config_dump,
+            task_for_report,
+            output_path=report_path,
+            use_llm_summary=_use_llm_summary,
+            minimal_report=req.minimal_report,
+        )
+        report_html = out.get("html") or ""
+        llm_summary = out.get("llm_summary")
+
+        # 聚合每轮 agent_results
+        fallback_agent = agents[0] if agents else config.extra.get("agent_under_test", "Unknown")
+        all_agent_results: list[AgentTestResult] = []
+        metrics_per_round: list[dict[str, Any]] = []
+        overall_success = True
+        for r in results:
+            traj = r.get("trajectory") or []
+            fq = req.query or ""
+            if not fq and traj:
+                first_snap = ((traj[0].get("step_result") or {}).get("agent_input_snapshot") or {})
+                fq = (first_snap.get("state") or {}).get("query") or req.goal
+            all_agent_results.extend(_extract_agent_results(traj, fallback_agent, fq))
+            m = r.get("metrics") or {}
+            metrics_per_round.append(m if isinstance(m, dict) else {})
+            if not (isinstance(m, dict) and m.get("success")):
+                overall_success = False
+        if not results:
+            overall_success = False
+
+        _append_trace({
+            "event": "run_full_ok",
+            "request_id": run_id,
+            "rounds_run": len(results),
+            "agent_count": len(all_agent_results),
+            "success": overall_success,
+            "llm_summary_len": len(llm_summary) if isinstance(llm_summary, str) else 0,
+            "report_len": len(report_html),
+        })
+
+        return PofficesRunFullResponse(
+            request_id=run_id,
+            code="ok",
+            data=PofficesRunFullData(
+                run_id=run_id,
+                success=overall_success,
+                rounds_run=len(results),
+                agent_results=all_agent_results,
+                metrics_per_round=metrics_per_round,
+                report_html=report_html,
+                llm_summary=llm_summary,
+                report_path=str(report_path) if report_path.exists() else None,
+            ),
+        )
+
+    except Exception as exc:
+        _append_trace({"event": "run_full_exception", "request_id": run_id, "error": str(exc)})
+        return PofficesRunFullResponse(
+            request_id=run_id,
+            code="run_failed",
+            data=None,
+            error=PofficesError(
+                code="run_failed",
+                message=str(exc),
+                details={"goal": req.goal},
+            ),
+        )
+
+
+_REPORT_DIR = Path(__file__).resolve().parent.parent.parent / "logs" / "poffices_api_run_full"
+
+
+def _public_base_url(request: Request | None) -> str:
+    """拼公开可访问的 base URL（给 Poffices 画布用）。
+
+    优先读 env `POFFICES_PUBLIC_BASE_URL`（如 ngrok 域名）；没设置则从 request 拼
+    scheme+host，用 X-Forwarded-* 头以兼容反代。末尾不带斜杠。
+    """
+    env = os.environ.get("POFFICES_PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if env:
+        return env
+    if request is None:
+        return ""
+    fwd_proto = request.headers.get("x-forwarded-proto")
+    fwd_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    scheme = fwd_proto or request.url.scheme
+    host = fwd_host or request.url.netloc
+    return f"{scheme}://{host}".rstrip("/")
+
+
+def _build_report_markdown(
+    *,
+    report_url: str,
+    resp: "PofficesRunFullResponse",
+    embed_iframe: bool = True,
+) -> str:
+    """把 HTML 报告包装成 Poffices 画布友好的 markdown：链接 + 关键指标 + 可选 iframe。
+
+    Poffices 的 Custom Block 大多把 content 当 markdown 渲染；直接塞 HTML 源码会被当文字显示。
+    这里给出：
+    - 顶部一个标题
+    - 关键指标（成功轮数 / 轮数 / Agent 数）
+    - 「查看完整报告」超链接（新窗口打开）
+    - iframe 内嵌（若 Poffices 的渲染器支持 HTML 透传，画布内直接可滚动阅读报告）
+    """
+    data = resp.data
+    lines: list[str] = []
+    lines.append("## RPA 测试报告")
+    if data:
+        ok_rounds = sum(1 for m in data.metrics_per_round if isinstance(m, dict) and m.get("success"))
+        lines.append("")
+        lines.append(f"- 总轮数：**{data.rounds_run}**，成功：**{ok_rounds}**")
+        lines.append(f"- 参与 Agent 数：**{len({r.agent_name for r in data.agent_results})}**")
+        lines.append(f"- 整体成功：**{'✅' if data.success else '❌'}**")
+        if data.llm_summary:
+            snippet = data.llm_summary.strip().replace("\n", " ")
+            if len(snippet) > 280:
+                snippet = snippet[:280] + "…"
+            lines.append("")
+            lines.append("**LLM 多轮分析摘要**：" + snippet)
+    if report_url:
+        lines.append("")
+        lines.append(f"📄 [点击查看完整 HTML 报告（新窗口）]({report_url})")
+        if embed_iframe:
+            lines.append("")
+            lines.append(
+                f'<iframe src="{report_url}" width="100%" height="720" '
+                f'style="border:1px solid #ddd;border-radius:8px;"></iframe>'
+            )
+    else:
+        lines.append("")
+        lines.append("⚠️ 报告 URL 未生成（未配置 POFFICES_PUBLIC_BASE_URL 且无法从请求头推断）。")
+    return "\n".join(lines)
+
+
+@router.get(
+    "/report/{request_id}",
+    summary="Poffices 完整流水线 — HTML 报告静态下载",
+    response_class=HTMLResponse,
+)
+def poffices_report(request_id: str) -> HTMLResponse:
+    """按 request_id 返回 `/run_full` 落盘的 HTML 报告。
+
+    防路径穿越：request_id 只允许 [A-Za-z0-9_-]+；其余字符一律 404。
+    """
+    import re
+
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", request_id or ""):
+        raise HTTPException(status_code=404, detail="report not found")
+    path = _REPORT_DIR / f"{request_id}.html"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="report not found")
+    try:
+        html = path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"read failed: {e}") from e
+    # 允许 iframe 嵌入：不设 X-Frame-Options DENY；Content-Security-Policy 留空交由上游反代
+    return HTMLResponse(content=html, status_code=200)
+
+
+async def _sse_run_full_with_heartbeat(
+    req: "PofficesRunFullRequest",
+    *,
+    model: str | None,
+    public_base_url: str,
+    heartbeat_sec: float = 5.0,
+    body_chunk_size: int = 2000,
+):
+    """流式推送完整 HTML 报告。心跳用真 content delta，避免代理判定为空闲超时。"""
+    import asyncio
+
+    resp_id = f"chatcmpl-{int(time.time())}"
+
+    def _make_chunk(
+        content: str | None = None,
+        finish: bool = False,
+        extracted: dict[str, Any] | None = None,
+    ) -> str:
+        delta = {"content": content} if content is not None else {}
+        payload: dict[str, Any] = {
+            "id": resp_id,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": "stop" if finish else None,
+                }
+            ],
+        }
+        if extracted is not None:
+            payload["extracted_data"] = extracted
+        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    yield _make_chunk(content="🤖 RPA 全流程（含报告）启动...\n")
+
+    loop = asyncio.get_running_loop()
+    task = loop.run_in_executor(None, _execute_run_full_sync, req)
+
+    while True:
+        try:
+            resp = await asyncio.wait_for(asyncio.shield(task), timeout=heartbeat_sec)
+            break
+        except asyncio.TimeoutError:
+            yield _make_chunk(content=".")
+
+    # 关键契约：content = 紧凑 JSON 字符串（对齐 /run 的载荷形态，Poffices openllm handler
+    # 才能把 {layer_name_X_output} 稳定透给下游节点）。HTML 报告体积过大，不塞进 content；
+    # 下游只需要 report_url，点开即可查看本地渲染的完整 HTML 报告。
+    report_url = (
+        f"{public_base_url}/api/v1/poffices/report/{req.request_id}"
+        if public_base_url
+        else ""
+    )
+    if resp.data is not None:
+        resp.data.report_url = report_url
+        resp.data.report_html = ""  # 流模式下剔除 HTML 以缩小 payload
+    resp_dict = resp.model_dump()
+    resp_dict["report_url"] = report_url  # 顶层冗余一份，extracted_data 也能直接取
+    body = json.dumps(resp_dict, ensure_ascii=False)
+
+    yield _make_chunk(content="\n\n")
+    for i in range(0, len(body), body_chunk_size):
+        yield _make_chunk(content=body[i : i + body_chunk_size])
+
+    yield _make_chunk(content="", finish=True, extracted=resp_dict)
+    yield "data: [DONE]\n\n"
+
+
+@router.post(
+    "/run_full",
+    summary="Poffices 完整流水线 — 多轮 RPA + LLM 多轮总结 + HTML 报告",
+    response_model=None,
+)
+async def poffices_run_full(request: Request) -> PofficesRunFullResponse | JSONResponse:
+    """
+    与本地 `run_poffices_agent.py` 对齐的完整流水线接口：
+    接收 goal（+ 可选 agents/query/rounds/use_llm_summary），在本地依次
+    **规划 → 多轮 Playwright RPA → LLM 多轮分析 → HTML 报告**，
+    最终把完整 HTML 报告作为 `choices[0].message.content` 返回，供 Poffices
+    Custom Block 画布直接展示；顶层 `extracted_data` 同时提供结构化字段。
+
+    与 `/run` 的区别：
+    - `/run`：单轮、结构化 agent_results，给下游 Agent（评分等）接力。
+    - `/run_full`：多轮、HTML 报告，**不**适合给下一个 Agent 解析——是给人看的。
+
+    **超时提示**：多轮 + LLM 总结可能 > 5 分钟，务必调大上游超时。
+    """
+    import asyncio
+
+    raw_bytes = await request.body()
+    try:
+        text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise HTTPException(status_code=400, detail="Invalid UTF-8 body") from e
+    try:
+        raw = json.loads(text) if text.strip() else {}
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from e
+
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+
+    _hdrs = {
+        k: request.headers.get(k)
+        for k in (
+            "user-agent", "x-forwarded-for", "x-real-ip", "origin", "referer",
+            "x-request-id", "x-correlation-id", "x-poffices-agent-id",
+            "x-poffices-run-id", "x-poffices-node-id", "authorization",
+            "host", "cf-connecting-ip", "forwarded",
+        )
+        if request.headers.get(k)
+    }
+    _append_trace({
+        "event": "run_full_request_in",
+        "client": getattr(request.client, "host", None),
+        "headers": _hdrs,
+        "raw_preview": _truncate(json.dumps(raw, ensure_ascii=False)),
+    })
+
+    normalized = _coerce_bools(_normalize_body_for_plan(raw))
+    try:
+        req = PofficesRunFullRequest.model_validate(normalized)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    openai_compat = raw.get("response_envelope") != "native"
+    is_stream = bool(raw.get("stream"))
+    model_name = raw.get("model") if isinstance(raw.get("model"), str) else None
+
+    public_base = _public_base_url(request)
+
+    if openai_compat and is_stream:
+        _append_trace({"event": "run_full_response_sse_stream", "request_id": req.request_id})
+        return StreamingResponse(
+            _sse_run_full_with_heartbeat(req, model=model_name, public_base_url=public_base),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    loop = asyncio.get_running_loop()
+    resp = await loop.run_in_executor(None, _execute_run_full_sync, req)
+
+    if openai_compat:
+        report_url = (
+            f"{public_base}/api/v1/poffices/report/{req.request_id}" if public_base else ""
+        )
+        if resp.data is not None:
+            resp.data.report_url = report_url
+            resp.data.report_html = ""  # chat.completion 路径也剔除 HTML，缩小 payload
+        resp_dict = resp.model_dump()
+        resp_dict["report_url"] = report_url
+        body = json.dumps(resp_dict, ensure_ascii=False)
+        _append_trace({
+            "event": "run_full_response_openai_chat_completion",
+            "request_id": req.request_id,
+            "report_url": report_url,
+        })
+        return JSONResponse(
+            _openai_chat_completion_dict(
+                content=body,
+                model=model_name,
                 extracted_data=resp_dict,
             )
         )
